@@ -35,7 +35,7 @@ export async function renderDashboard() {
       return;
     }
 
-    // Mostrar loading
+    // Armar estructura base de la vista
     app.innerHTML = `
       <div class="container mt-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -90,6 +90,7 @@ export async function renderDashboard() {
           </div>
         </div>
         
+        <div id="usageSummary" class="mb-3"></div>
         <div id="fileList" class="row">
           <div class="col-12 text-center">
             <div class="spinner-border text-primary" role="status">
@@ -104,15 +105,60 @@ export async function renderDashboard() {
     const fileList = document.getElementById('fileList');
     const response = await files.getAll();
     const filesData = Array.isArray(response) ? response : (response?.data || []);
+    const visibleFiles = Array.isArray(filesData)
+      ? (currentUser?.is_admin ? filesData.filter(f => f.user_id === currentUser.id) : filesData)
+      : [];
 
-    if (filesData.length === 0) {
+    // Calcular uso y cuota
+    try {
+      let settings = null;
+      settings = await fetchAPI(currentUser?.is_admin ? 'settings' : 'settings/public').catch(() => null);
+      const defaultLimit = settings?.default_storage_limit ?? (10 * 1024 * 1024);
+      const ownFiles = Array.isArray(filesData)
+        ? filesData.filter(f => f.user_id === currentUser?.id || !currentUser?.is_admin)
+        : [];
+      const usedBytes = ownFiles.reduce((acc, f) => acc + (f.size || 0), 0);
+      const userQuota = typeof currentUser?.storage_limit === 'number' ? currentUser.storage_limit : null;
+      const usageEl = document.getElementById('usageSummary');
+      if (usageEl) {
+        let quotaText = '';
+        let progress = '';
+        if (userQuota !== null) {
+          const pct = Math.min(100, Math.round((usedBytes / Math.max(1, userQuota)) * 100));
+          quotaText = `Uso: ${formatFileSize(usedBytes)} de ${formatFileSize(userQuota)}`;
+          progress = `
+            <div class="progress" style="height: 8px;">
+              <div class="progress-bar ${pct >= 90 ? 'bg-danger' : pct >= 70 ? 'bg-warning' : 'bg-success'}" role="progressbar" style="width: ${pct}%" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+          `;
+        } else {
+          quotaText = `Uso: ${formatFileSize(usedBytes)}. La cuota aplica por grupo o global (por defecto ${formatFileSize(defaultLimit)}).`;
+        }
+        usageEl.innerHTML = `
+          <div class="card">
+            <div class="card-body py-2">
+              <div class="d-flex justify-content-between align-items-center">
+                <div class="small text-muted">Estado de almacenamiento</div>
+                <div class="small">${quotaText}</div>
+              </div>
+              ${progress}
+            </div>
+          </div>
+        `;
+      }
+    } catch (e) {
+      // no bloquear UI si falla
+      console.warn('No se pudo calcular el uso/cuota:', e);
+    }
+
+    if (visibleFiles.length === 0) {
       fileList.innerHTML = `
         <div class="col-12">
           <div class="alert alert-info">No hay archivos subidos.</div>
         </div>
       `;
     } else {
-      fileList.innerHTML = filesData.map(file => `
+      fileList.innerHTML = visibleFiles.map(file => `
         <div class="col-md-4 mb-4">
           <div class="card h-100">
             <div class="card-body">
@@ -124,9 +170,9 @@ export async function renderDashboard() {
             </div>
             <div class="card-footer bg-transparent">
               <div class="d-flex justify-content-between">
-                <a href="${files.download(file.id)}" class="btn btn-sm btn-outline-primary">
+                <button class="btn btn-sm btn-outline-primary download-file" data-id="${file.id}" data-name="${file.original_name || 'archivo'}">
                   <i class="bi bi-download"></i> Descargar
-                </a>
+                </button>
                 <button class="btn btn-sm btn-outline-danger delete-file" data-id="${file.id}">
                   <i class="bi bi-trash"></i> Eliminar
                 </button>
@@ -139,6 +185,11 @@ export async function renderDashboard() {
       // Agregar event listeners para eliminar archivos
       document.querySelectorAll('.delete-file').forEach(button => {
         button.addEventListener('click', handleDeleteFile);
+      });
+
+      // Agregar event listeners para descargar con token
+      document.querySelectorAll('.download-file').forEach(button => {
+        button.addEventListener('click', handleDownloadFile);
       });
     }
 
@@ -245,6 +296,17 @@ async function handleDeleteFile(e) {
   } catch (error) {
     console.error('Error al eliminar archivo:', error);
     showError('Error al eliminar el archivo');
+  }
+}
+
+async function handleDownloadFile(e) {
+  const id = e.currentTarget.dataset.id;
+  const name = e.currentTarget.dataset.name || `archivo_${id}`;
+  try {
+    await files.downloadFile(id, name);
+  } catch (error) {
+    console.error('Error al descargar archivo:', error);
+    showError('No se pudo descargar el archivo');
   }
 }
 

@@ -205,8 +205,26 @@ export const files = {
     }
   }),
   delete: (id) => fetchAPI(`files/${id}`, { method: 'DELETE' }),
-  download: async (id) => {
-    await fetchAPI(`files/${id}/download`, {}, true);
+  download: (id) => `${API_BASE_URL}/files/${id}/download`,
+  downloadFile: async (id, filename) => {
+    const token = localStorage.getItem('authToken');
+    const res = await fetch(`${API_BASE_URL}/files/${id}/download`, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      credentials: 'include'
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => 'Error al descargar');
+      throw new Error(msg || `Error ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || `archivo_${id}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
   }
 };
 

@@ -47,6 +47,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('users', UserController::class);
     });
 
+    // Rutas públicas de configuración (autenticadas, no admin)
+    // Debe declararse ANTES del apiResource para evitar que coincida con settings/{setting}
+    Route::get('settings/public', [StorageSettingController::class, 'publicIndex']);
+
     // Rutas de configuración (solo administradores)
     Route::middleware('can:admin')->group(function () {
         Route::apiResource('settings', StorageSettingController::class);

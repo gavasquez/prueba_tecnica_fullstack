@@ -3,13 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Group;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class GroupController extends Controller
 {
     /**
-     * Display a listing of the resource.
+     * Listar grupos
      */
     public function index()
     {
@@ -41,17 +42,22 @@ class GroupController extends Controller
     }
 
     /**
-     * Store a newly created resource in storage.
+     * Crear grupo.
      */
     public function store(Request $request)
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
+            'storage_limit' => 'sometimes|integer|min:0',
         ]);
 
         try {
-            $group = Group::create($validated);
+            $group = Group::create([
+                'name' => $validated['name'],
+                'description' => $validated['description'] ?? null,
+                'storage_limit' => $validated['storage_limit'] ?? (1024 * 1024 * 10),
+            ]);
             return response()->json($group, 201);
             
         } catch (\Exception $e) {
@@ -63,7 +69,7 @@ class GroupController extends Controller
     }
 
     /**
-     * Display the specified resource.
+     * Ver un grupo.
      */
     public function show(string $id)
     {
@@ -80,18 +86,28 @@ class GroupController extends Controller
     }
 
     /**
-     * Update the specified resource in storage.
+     * Actualizar un grupo.
      */
     public function update(Request $request, string $id)
     {
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
             'description' => 'nullable|string',
+            'storage_limit' => 'sometimes|integer|min:0',
         ]);
 
         try {
             $group = Group::findOrFail($id);
-            $group->update($validated);
+            if (array_key_exists('name', $validated)) {
+                $group->name = $validated['name'];
+            }
+            if (array_key_exists('description', $validated)) {
+                $group->description = $validated['description'];
+            }
+            if (array_key_exists('storage_limit', $validated)) {
+                $group->storage_limit = $validated['storage_limit'];
+            }
+            $group->save();
             return response()->json($group);
             
         } catch (\Exception $e) {
@@ -103,7 +119,7 @@ class GroupController extends Controller
     }
 
     /**
-     * Remove the specified resource from storage.
+     * Eliminar un grupo.
      */
     public function destroy(string $id)
     {
@@ -121,5 +137,40 @@ class GroupController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Asignar usuario a grupo.
+     */
+    public function addUser(Request $request, Group $group)
+    {
+        $authUser = Auth::user();
+        if (!$authUser->isAdmin()) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $validated = $request->validate([
+            'user_id' => 'required|exists:users,id',
+        ]);
+
+        $user = User::findOrFail($validated['user_id']);
+        $group->users()->syncWithoutDetaching([$user->id]);
+
+        return response()->json(['message' => 'Usuario asignado al grupo']);
+    }
+
+    /**
+     * Quitar usuario de un grupo.
+     */
+    public function removeUser(Request $request, Group $group, User $user)
+    {
+        $authUser = Auth::user();
+        if (!$authUser->isAdmin()) {
+            return response()->json(['message' => 'No autorizado'], 403);
+        }
+
+        $group->users()->detach($user->id);
+
+        return response()->json(['message' => 'Usuario removido del grupo']);
     }
 }

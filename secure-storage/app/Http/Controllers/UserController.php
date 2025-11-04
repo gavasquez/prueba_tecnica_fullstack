@@ -12,8 +12,7 @@ use Illuminate\Validation\Rule;
 class UserController extends Controller
 {
     /**
-     * Display a listing of the resource.
-     * Solo administradores pueden ver todos los usuarios
+     * Listar usuarios.
      */
     public function index()
     {
@@ -42,6 +41,7 @@ class UserController extends Controller
                     'role_id' => $user->role_id,
                     'role' => $user->role ? $user->role->name : null,
                     'is_admin' => $user->role_id === 1,
+                    'storage_limit' => $user->storage_limit,
                     'groups' => $user->groups->map(function ($group) {
                         return [
                             'id' => $group->id,
@@ -66,8 +66,7 @@ class UserController extends Controller
     }
 
     /**
-     * Store a newly created resource in storage.
-     * Solo administradores pueden crear usuarios
+     * Crear usuario.
      */
     public function store(Request $request)
     {
@@ -81,11 +80,17 @@ class UserController extends Controller
                 ], 403);
             }
             
+            // Normalizar storage_limit vacío a null
+            if ($request->has('storage_limit') && ($request->input('storage_limit') === '' || $request->input('storage_limit') === null)) {
+                $request->merge(['storage_limit' => null]);
+            }
+
             $validated = $request->validate([
                 'name' => 'required|string|max:255',
                 'email' => 'required|string|email|max:255|unique:users',
                 'password' => 'required|string|min:8',
                 'role_id' => 'sometimes|integer|exists:roles,id',
+                'storage_limit' => 'sometimes|nullable|numeric|min:0',
             ]);
             
             // Crear el usuario
@@ -94,6 +99,7 @@ class UserController extends Controller
                 'email' => $validated['email'],
                 'password' => Hash::make($validated['password']),
                 'role_id' => $validated['role_id'] ?? 2, // Por defecto, usuario regular
+                'storage_limit' => isset($validated['storage_limit']) ? (int)$validated['storage_limit'] : null,
             ]);
             
             // Cargar relaciones
@@ -106,6 +112,7 @@ class UserController extends Controller
                 'role_id' => $newUser->role_id,
                 'role' => $newUser->role ? $newUser->role->name : null,
                 'is_admin' => $newUser->role_id === 1,
+                'storage_limit' => $newUser->storage_limit,
                 'groups' => [],
                 'created_at' => $newUser->created_at,
                 'updated_at' => $newUser->updated_at,
@@ -125,8 +132,7 @@ class UserController extends Controller
     }
 
     /**
-     * Display the specified resource.
-     * Solo administradores pueden ver usuarios individuales
+     * Ver un usuario.
      */
     public function show(string $id)
     {
@@ -150,6 +156,7 @@ class UserController extends Controller
                 'role_id' => $targetUser->role_id,
                 'role' => $targetUser->role ? $targetUser->role->name : null,
                 'is_admin' => $targetUser->role_id === 1,
+                'storage_limit' => $targetUser->storage_limit,
                 'groups' => $targetUser->groups->map(function ($group) {
                     return [
                         'id' => $group->id,
@@ -175,8 +182,7 @@ class UserController extends Controller
     }
 
     /**
-     * Update the specified resource in storage.
-     * Solo administradores pueden actualizar usuarios
+     * Actualizar usuario.
      */
     public function update(Request $request, string $id)
     {
@@ -192,6 +198,11 @@ class UserController extends Controller
             
             $targetUser = User::findOrFail($id);
             
+            // Normalizar storage_limit vacío a null
+            if ($request->has('storage_limit') && ($request->input('storage_limit') === '' || $request->input('storage_limit') === null)) {
+                $request->merge(['storage_limit' => null]);
+            }
+
             $validated = $request->validate([
                 'name' => 'sometimes|string|max:255',
                 'email' => [
@@ -203,6 +214,7 @@ class UserController extends Controller
                 ],
                 'password' => 'sometimes|string|min:8',
                 'role_id' => 'sometimes|integer|exists:roles,id',
+                'storage_limit' => 'sometimes|nullable|numeric|min:0',
             ]);
             
             // Actualizar campos
@@ -221,6 +233,9 @@ class UserController extends Controller
             if (isset($validated['role_id'])) {
                 $targetUser->role_id = $validated['role_id'];
             }
+        if (array_key_exists('storage_limit', $validated)) {
+            $targetUser->storage_limit = isset($validated['storage_limit']) ? (int)$validated['storage_limit'] : null;
+        }
             
             $targetUser->save();
             
@@ -234,6 +249,7 @@ class UserController extends Controller
                 'role_id' => $targetUser->role_id,
                 'role' => $targetUser->role ? $targetUser->role->name : null,
                 'is_admin' => $targetUser->role_id === 1,
+                'storage_limit' => $targetUser->storage_limit,
                 'groups' => $targetUser->groups->map(function ($group) {
                     return [
                         'id' => $group->id,
@@ -264,8 +280,7 @@ class UserController extends Controller
     }
 
     /**
-     * Remove the specified resource from storage.
-     * Solo administradores pueden eliminar usuarios
+     * Eliminar usuario.
      */
     public function destroy(string $id)
     {

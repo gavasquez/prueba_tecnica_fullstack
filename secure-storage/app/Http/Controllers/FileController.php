@@ -12,21 +12,21 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Http\File as HttpFile;
 use Illuminate\Validation\Rule;
 use ZipArchive;
+use App\Support\StorageConfig;
 
 class FileController extends Controller
 {
     /**
-     * Obtener lista de archivos del usuario autenticado
+     * Listar archivos del usuario autenticado (o todos si es admin).
      */
     public function index()
     {
         $user = Auth::user();
         
-        // Si es administrador, ver todos los archivos, de lo contrario solo los del usuario
-        $files = $user->isAdmin() 
+        // Si es administrador, ver todos los archivos; de lo contrario, solo archivos subidos por el usuario
+        $files = $user->isAdmin()
             ? File::with(['user', 'group'])->latest()->paginate(20)
             : File::where('user_id', $user->id)
-                ->orWhereIn('group_id', $user->groups->pluck('id'))
                 ->with(['user', 'group'])
                 ->latest()
                 ->paginate(20);
@@ -35,19 +35,23 @@ class FileController extends Controller
     }
 
     /**
-     * Almacenar un nuevo archivo
+     * Subir un archivo nuevo con validaciones de seguridad y cuota.
      */
     public function store(Request $request)
     {
         $user = Auth::user();
         
+        // Validar tamaño de archivo dinámicamente
+        $maxFileSizeBytes = StorageConfig::getMaxFileSize();
+        $maxFileSizeKb = (int) ceil($maxFileSizeBytes / 1024);
+
         $validated = $request->validate([
-            'file' => 'required|file|max:10240', // Máximo 10MB
+            'file' => 'required|file|max:' . $maxFileSizeKb,
             'group_id' => 'required|exists:groups,id',
             'description' => 'nullable|string|max:500',
         ]);
 
-        // Verificar si el usuario pertenece al grupo
+        // Verificar que el usuario pertenezca al grupo (salvo admin)
         if (!$user->groups->contains($validated['group_id']) && !$user->isAdmin()) {
             return response()->json([
                 'message' => 'No tienes permiso para subir archivos a este grupo.'
@@ -60,15 +64,15 @@ class FileController extends Controller
         $mimeType = $file->getMimeType();
         $size = $file->getSize();
         
-        // Verificar extensión permitida
-        $forbiddenExtensions = StorageSetting::first()->forbidden_extensions ?? [];
+        // Validar extensión no prohibida
+        $forbiddenExtensions = StorageConfig::getBannedExtensions();
         if (in_array(strtolower($extension), $forbiddenExtensions)) {
             return response()->json([
-                'message' => 'El tipo de archivo no está permitido.'
+                'message' => "Error: El tipo de archivo '.{$extension}' no está permitido"
             ], 422);
         }
 
-        // Verificar si es un archivo ZIP para inspeccionar su contenido
+        // Si es .zip, inspeccionar su contenido por extensiones prohibidas
         if (strtolower($extension) === 'zip') {
             $zip = new ZipArchive;
             if ($zip->open($file->getPathname()) === true) {
@@ -77,7 +81,7 @@ class FileController extends Controller
                     $zipExt = pathinfo($zipFile['name'], PATHINFO_EXTENSION);
                     if (in_array(strtolower($zipExt), $forbiddenExtensions)) {
                         return response()->json([
-                            'message' => 'El archivo ZIP contiene archivos con extensiones no permitidas.'
+                            'message' => "Error: El archivo '{$zipFile['name']}' dentro del .zip no está permitido"
                         ], 422);
                     }
                 }
@@ -85,22 +89,29 @@ class FileController extends Controller
             }
         }
 
-        // Verificar cuota de almacenamiento
+        // Verificar cuota (prioridad: usuario > grupo > global)
         $group = Group::findOrFail($validated['group_id']);
-        if (($group->used_storage + $size) > $group->storage_limit) {
+        $assignedQuota = $user->storage_limit
+            ?? $group->storage_limit
+            ?? StorageConfig::getDefaultStorageLimit();
+
+        // Uso actual del usuario (suma total de sus archivos)
+        $currentUsage = File::where('user_id', $user->id)->sum('size');
+        if (($currentUsage + $size) > $assignedQuota) {
+            $assignedQuotaMb = number_format($assignedQuota / (1024 * 1024), 2);
             return response()->json([
-                'message' => 'No hay suficiente espacio de almacenamiento en el grupo.'
+                'message' => "Error: Cuota de almacenamiento ({$assignedQuotaMb} MB) excedida"
             ], 422);
         }
 
-        // Generar nombre único para el archivo
+        // Nombre único y ruta de almacenamiento
         $fileName = Str::random(40) . '.' . $extension;
         $filePath = 'files/' . $fileName;
 
-        // Almacenar el archivo
+        // Guardar archivo físico
         Storage::putFileAs('public/files', $file, $fileName);
 
-        // Crear registro en la base de datos
+        // Guardar registro en base de datos
         $fileRecord = File::create([
             'user_id' => $user->id,
             'group_id' => $validated['group_id'],
@@ -113,8 +124,7 @@ class FileController extends Controller
             'is_approved' => $user->isAdmin(), // Aprobación automática si es admin
         ]);
 
-        // Actualizar el espacio usado en el grupo
-        $group->increment('used_storage', $size);
+        // Nota: el uso por grupo se infiere por archivos; no se mantienen contadores manuales
 
         return response()->json([
             'message' => 'Archivo subido exitosamente',
@@ -123,7 +133,7 @@ class FileController extends Controller
     }
 
     /**
-     * Mostrar los detalles de un archivo
+     * Ver detalles de un archivo.
      */
     public function show(File $file)
     {
@@ -132,7 +142,7 @@ class FileController extends Controller
     }
 
     /**
-     * Actualizar metadatos de un archivo (solo aprobación/rechazo para admin)
+     * Aprobar o rechazar un archivo (solo admin).
      */
     public function update(Request $request, File $file)
     {
@@ -155,19 +165,16 @@ class FileController extends Controller
     }
 
     /**
-     * Eliminar un archivo
+     * Eliminar un archivo (archivo físico y registro).
      */
     public function destroy(File $file)
     {
         $this->authorize('delete', $file);
         
         // Eliminar archivo físico
-        Storage::delete('public/' . $file->path);
+        Storage::delete('public/' . trim($file->path, '/'). '/' . $file->stored_name);
         
-        // Actualizar espacio usado en el grupo
-        if ($file->group) {
-            $file->group->decrement('used_storage', $file->size);
-        }
+        // Nota: no se tocan contadores manuales de grupos para evitar inconsistencias
         
         // Eliminar registro
         $file->delete();
@@ -176,17 +183,18 @@ class FileController extends Controller
     }
     
     /**
-     * Descargar un archivo
+     * Descargar un archivo.
      */
     public function download(File $file)
     {
         $this->authorize('download', $file);
         
-        if (!Storage::exists('public/' . $file->path)) {
+        $relativePath = trim($file->path, '/'). '/' . $file->stored_name;
+        if (!Storage::exists('public/' . $relativePath)) {
             abort(404, 'El archivo no existe');
         }
         
-        $filePath = storage_path('app/public/' . $file->path);
+        $filePath = storage_path('app/public/' . $relativePath);
         return response()->download($filePath, $file->original_name);
     }
 }
