@@ -24,8 +24,8 @@ class FilePolicy
     public function view(User $user, File $file): bool
     {
         // El usuario es el propietario, es administrador o pertenece al mismo grupo
-        return $user->id === $file->user_id || 
-               $user->isAdmin() || 
+        return $user->id === $file->user_id ||
+               $user->isAdmin() ||
                $user->groups->contains($file->group_id);
     }
 
@@ -61,7 +61,6 @@ class FilePolicy
      */
     public function download(User $user, File $file): bool
     {
-        // Usuarios del mismo grupo, el propietario o administradores pueden descargar
         return $user->id === $file->user_id
             || $user->isAdmin()
             || $user->groups->contains('id', $file->group_id);
