@@ -22,7 +22,7 @@ class DatabaseSeeder extends Seeder
         $adminRole = Role::firstOrCreate(['name' => 'admin'], [
             'description' => 'Administrador del sistema'
         ]);
-        
+
         $userRole = Role::firstOrCreate(['name' => 'user'], [
             'description' => 'Usuario regular'
         ]);

@@ -108,8 +108,8 @@ class FileController extends Controller
         $fileName = Str::random(40) . '.' . $extension;
         $filePath = 'files/' . $fileName;
 
-        // Guardar archivo físico
-        Storage::putFileAs('public/files', $file, $fileName);
+        // Guardar archivo físico en el disco 'public'
+        Storage::disk('public')->putFileAs('files', $file, $fileName);
 
         // Guardar registro en base de datos
         $fileRecord = File::create([
@@ -171,8 +171,8 @@ class FileController extends Controller
     {
         $this->authorize('delete', $file);
         
-        // Eliminar archivo físico
-        Storage::delete('public/' . trim($file->path, '/'). '/' . $file->stored_name);
+        // Eliminar archivo físico desde el disco 'public'
+        Storage::disk('public')->delete(trim($file->path, '/'). '/' . $file->stored_name);
         
         // Nota: no se tocan contadores manuales de grupos para evitar inconsistencias
         
@@ -190,11 +190,11 @@ class FileController extends Controller
         $this->authorize('download', $file);
         
         $relativePath = trim($file->path, '/'). '/' . $file->stored_name;
-        if (!Storage::exists('public/' . $relativePath)) {
+        if (!Storage::disk('public')->exists($relativePath)) {
             abort(404, 'El archivo no existe');
         }
         
-        $filePath = storage_path('app/public/' . $relativePath);
+        $filePath = Storage::disk('public')->path($relativePath);
         return response()->download($filePath, $file->original_name);
     }
 }

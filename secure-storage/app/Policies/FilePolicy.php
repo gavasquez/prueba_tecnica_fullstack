@@ -61,7 +61,9 @@ class FilePolicy
      */
     public function download(User $user, File $file): bool
     {
-        // Usuarios del mismo grupo o administradores pueden descargar
-        return $user->groups->contains($file->group_id) || $user->isAdmin();
+        // Usuarios del mismo grupo, el propietario o administradores pueden descargar
+        return $user->id === $file->user_id
+            || $user->isAdmin()
+            || $user->groups->contains('id', $file->group_id);
     }
 }
